@@ -45,8 +45,9 @@ info:
     The API is **anonymous by default** — most callers send no credentials. To obtain the
     authenticated or privileged tier:
 
-    1. **Get a token.** Open `GET /rdap/farv1_session/login` in a browser and sign in with
-       **eeID**. The callback returns your eeID **id_token** (a short-lived RS256 JWT).
+    1. **Get a token.** Open the **site root `/`** (or `GET /rdap/farv1_session/login`) in a
+       browser — it shows the ".ee RDAP" page with a **Log in with eeID** button — and sign
+       in. The callback returns your eeID **id_token** (a short-lived RS256 JWT).
     2. **Send it.** Pass it on every request as `Authorization: Bearer <id_token>`. The
        service validates it against the eeID JWKS and resolves your identity.
     3. **Privileged** access additionally requires an **active grant** registered for your
@@ -600,6 +601,24 @@ paths:
           $ref: '#/components/responses/TooManyRequests'
         '501':
           $ref: '#/components/responses/NotImplemented'
+
+  /:
+    get:
+      tags: [Authentication]
+      summary: Human entry point (the eeID surface)
+      operationId: root
+      security:
+        - {}
+      description: |
+        The site root serves the human-facing ".ee RDAP" page — the same server-rendered
+        eeID surface as `GET /rdap/farv1_session/login`: a **Log in with eeID** button and a
+        domain-lookup box. This is the front door for a person who types the bare hostname.
+        (Programmatic clients use `/rdap/help` and the JSON endpoints directly.)
+      responses:
+        '200':
+          description: The ".ee RDAP" HTML surface with the Log-in control.
+          content:
+            text/html: {}
 
   /rdap/farv1_session/login:
     get:
