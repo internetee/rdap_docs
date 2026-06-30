@@ -1,0 +1,15 @@
+{
+  "name": "rdap-api-docs",
+  "version": "1.0.0",
+  "description": "Documentation for the .ee RDAP service (RFC 7480 / RFC 9083 / RFC 9560)",
+  "scripts": {
+    "start": "redoc-cli serve openapi/openapi.yaml --watch",
+    "build": "redoc-cli bundle openapi/openapi.yaml -o index.html"
+  },
+  "keywords": ["rdap", "ee", "api", "documentation", "openapi", "redoc", "whois"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "redoc-cli": "^0.13.0"
+  }
+}

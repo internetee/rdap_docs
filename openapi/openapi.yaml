@@ -1,0 +1,1002 @@
+openapi: 3.0.0
+info:
+  title: .ee RDAP API
+  version: 1.0.0
+  description: |
+    # Registration Data Access Protocol (RDAP) for `.ee`
+
+    This is the Registration Data Access Protocol service for the `.ee` top-level domain,
+    operated by the Estonian Internet Foundation (EIS / Internet Eesti). RDAP is the
+    IETF successor to the legacy WHOIS protocol: a RESTful, JSON-over-HTTPS interface for
+    looking up registration data.
+
+    The service implements:
+
+    | RFC | What it covers |
+    |-----|----------------|
+    | **RFC 7480** | RDAP HTTP transport, status codes, media type |
+    | **RFC 9082** | RDAP query format (the lookup/search paths) |
+    | **RFC 9083** | RDAP JSON response format (the object model below) |
+    | **RFC 9560** | `farv1` Federated Authentication for RDAP (eeID OpenID Connect) |
+
+    ## Media type
+
+    Every RDAP response is served as **`application/rdap+json`**. Each body carries the
+    envelope members `rdapConformance` (`["rdap_level_0"]`, plus `"farv1"` on `/rdap/help`
+    when eeID is enabled) and `lang` (`"en"`); successful object responses also carry a
+    `notices` array.
+
+    ## Differentiated disclosure (privacy model)
+
+    `.ee` registration data contains personal data. What a caller sees depends on **who they
+    are**, in three tiers:
+
+    | Tier | Who | What is disclosed |
+    |------|-----|-------------------|
+    | **Anonymous** (default) | Any unauthenticated caller | Domain technical data + organisation (legal-person) contacts. **Natural-person registrant/contact name, e-mail and phone are removed**, and a `redacted[]` array (RFC 9083 §10) describes what was withheld. |
+    | **Authenticated** | A caller presenting a valid eeID Bearer token | As anonymous, plus the **registrant** natural-person contact data. Administrative/technical natural-person name & e-mail remain redacted. |
+    | **Privileged** | An authenticated caller with an active registry-side authorisation grant (e.g. law enforcement / CERT / RIA) | **Full** data: all contacts (with national identity codes and addresses), per-entity events, nameserver IP addresses and DNSSEC `dsData`. A *Privileged Access* notice records the legal basis. No `redacted[]`. |
+
+    The redaction is enforced server-side; an anonymous caller can never obtain natural-person
+    PII by any query. See the three response examples on `GET /rdap/domain/{name}`.
+
+    ## Authentication
+
+    The API is **anonymous by default** — most callers send no credentials. To obtain the
+    authenticated or privileged tier:
+
+    1. **Get a token.** Open `GET /rdap/farv1_session/login` in a browser and sign in with
+       **eeID**. The callback returns your eeID **id_token** (a short-lived RS256 JWT).
+    2. **Send it.** Pass it on every request as `Authorization: Bearer <id_token>`. The
+       service validates it against the eeID JWKS and resolves your identity.
+    3. **Privileged** access additionally requires an **active grant** registered for your
+       eeID subject on the registry side (Police / CERT / RIA). You do nothing extra — the
+       grant is looked up server-side; if none is active you receive the authenticated tier
+       (the service fails closed, never elevating on error).
+
+    The `farv1_openidcConfiguration` member of `GET /rdap/help` advertises the supported
+    OpenID Connect modes (session-oriented and token-oriented) and the eeID issuer.
+
+    ## Rate limiting
+
+    The service applies **tiered** rate limits: anonymous callers are limited by IP address
+    (IPv4, or IPv6 `/56` range), authenticated callers by identity + IP, and privileged
+    callers by identity + organisation. Search endpoints carry a stricter ceiling. When a
+    limit is exceeded the service returns **`429 Too Many Requests`** with a `Retry-After`
+    header (RFC 6585 §4). Limits are configurable and subject to operational change.
+
+    ## Errors
+
+    Every error renders the same RFC 9083 §6 error document
+    (`rdapConformance`, `lang`, `errorCode`, `title`, `description[]`) — with **generic**
+    messages that never reveal whether a specific record exists. Note the deliberate
+    **404 vs 501** split: a syntactically valid but **non-`.ee`** (out-of-scope) exact lookup
+    returns `404`, whereas an **unimplemented query type** (or an optional endpoint that is
+    disabled) returns `501`.
+
+    > **Note on placeholder text.** Some notice / legal-basis wording in this service is a
+    > pre-launch **placeholder** pending legal sign-off; it is reflected here as-is and is not
+    > final legal text.
+
+  contact:
+    name: Estonian Internet Foundation
+    url: https://www.internet.ee/
+  license:
+    name: WHOIS Terms and Conditions
+    url: https://www.internet.ee/domains/whois-terms-and-conditions
+
+servers:
+  - url: https://st-rdap.infra.tld.ee
+    description: Staging server
+  - url: https://rdap.internet.ee
+    description: Production server (placeholder host — to be confirmed at go-live)
+
+tags:
+  - name: Service
+    description: Service-level help & terms document.
+  - name: Domain
+    description: Exact domain lookup — the primary RDAP query.
+  - name: Optional lookups
+    description: >-
+      Nameserver, entity and domain-search endpoints. Each is gated by a server feature flag;
+      when its flag is off the path returns `501 Not Implemented` for every method.
+  - name: Authentication
+    description: >-
+      RFC 9560 `farv1` eeID session login and the browser session-state endpoints. Used to
+      obtain and manage the Bearer token for authenticated / privileged access.
+  - name: Operations
+    description: Non-RDAP service health endpoint.
+
+security:
+  - {}                     # anonymous is allowed on every endpoint
+  - bearerAuth: []         # ...and an optional eeID Bearer token elevates the tier
+
+paths:
+  /rdap/help:
+    get:
+      tags: [Service]
+      summary: Service help & terms document
+      operationId: getHelp
+      security:
+        - {}
+      description: |
+        Returns the service-level help document (RFC 9083 §7): the `rdapConformance`, the
+        service `notices` (Terms of Service, Rate Limiting Policy, Authentication, RDAP
+        Conformance), and — when eeID is enabled — the `farv1_openidcConfiguration` member
+        describing the OpenID Connect authentication options and the eeID issuer.
+
+        This endpoint performs **no** registry database read; the body is fixed and
+        data-free. `GET` also serves `HEAD`; any other method returns `404`.
+      x-codeSamples:
+        - lang: curl
+          label: Fetch help
+          source: |
+            curl -sS https://st-rdap.infra.tld.ee/rdap/help | jq .
+      responses:
+        '200':
+          description: The help & terms document.
+          content:
+            application/rdap+json:
+              schema:
+                $ref: '#/components/schemas/Help'
+              examples:
+                anonymous:
+                  summary: Without eeID (no farv1 member)
+                  value:
+                    rdapConformance: ["rdap_level_0"]
+                    lang: en
+                    links:
+                      - value: https://st-rdap.infra.tld.ee/rdap/help
+                        rel: self
+                        href: https://st-rdap.infra.tld.ee/rdap/help
+                        type: application/rdap+json
+                    notices:
+                      - title: Terms of Service
+                        description:
+                          - This RDAP service provides access to .ee domain registration data.
+                          - Use is subject to the WHOIS Terms and Conditions.
+                        links:
+                          - href: https://www.internet.ee/domains/whois-terms-and-conditions
+                            rel: alternate
+                            type: text/html
+                      - title: Rate Limiting Policy
+                        description:
+                          - >-
+                            This service enforces tiered rate limits. Anonymous callers are
+                            limited by IP address. Authenticated callers are limited by
+                            identity and IP address. Privileged callers are limited by identity
+                            and organisation. When a limit is exceeded the service returns HTTP
+                            429 Too Many Requests with a Retry-After header.
+                      - title: Authentication
+                        description:
+                          - This service supports anonymous queries.
+                          - Authenticated access via eeID is available.
+                      - title: RDAP Conformance
+                        description:
+                          - This service conforms to the RDAP standard (RFC 9083 / RFC 7480).
+                        links:
+                          - href: https://www.rfc-editor.org/rfc/rfc9083
+                            rel: alternate
+                            type: text/html
+                with_eeid:
+                  summary: With eeID enabled (farv1 member present)
+                  value:
+                    rdapConformance: ["rdap_level_0", "farv1"]
+                    lang: en
+                    links:
+                      - value: https://st-rdap.infra.tld.ee/rdap/help
+                        rel: self
+                        href: https://st-rdap.infra.tld.ee/rdap/help
+                        type: application/rdap+json
+                    farv1_openidcConfiguration:
+                      sessionClientSupported: true
+                      tokenClientSupported: true
+                      dntSupported: false
+                      providerDiscoverySupported: false
+                      issuerIdentifierSupported: true
+                      openidcProviders:
+                        - iss: https://test-auth.eeid.ee/hydra-public/
+                          name: eeID
+                          default: true
+                    notices:
+                      - title: Authentication
+                        description:
+                          - This service supports anonymous queries.
+                          - Authenticated access via eeID is available.
+
+  /rdap/domain/{name}:
+    get:
+      tags: [Domain]
+      summary: Look up a single .ee domain
+      operationId: getDomain
+      description: |
+        Returns the RFC 9083 domain object for an exact `.ee` domain name. The `name` may be
+        an A-label (`xn--nide-loa.ee`) or a U-label / Unicode form (`näide.ee`).
+
+        **The response depends on your access tier** (see the three examples):
+
+        * **Anonymous** — organisation contacts are shown; natural-person registrant/contact
+          name, e-mail and phone are removed, and a `redacted[]` array describes what was
+          withheld.
+        * **Authenticated** (valid eeID Bearer token) — additionally discloses the
+          **registrant** natural-person contact data.
+        * **Privileged** (active registry grant) — full data: identity codes, addresses,
+          per-entity events, nameserver IP addresses, DNSSEC `dsData`, and a *Privileged
+          Access* notice. No `redacted[]`.
+
+        `GET` also serves `HEAD`. `POST/PUT/PATCH/DELETE` return `405`. A syntactically valid
+        but non-`.ee` name is out of scope and returns `404`.
+      parameters:
+        - $ref: '#/components/parameters/DomainName'
+      x-codeSamples:
+        - lang: curl
+          label: Anonymous lookup
+          source: |
+            curl -sS https://st-rdap.infra.tld.ee/rdap/domain/example.ee | jq .
+        - lang: curl
+          label: Authenticated lookup (eeID Bearer token)
+          source: |
+            curl -sS -H "Authorization: Bearer ${EEID_ID_TOKEN}" \
+              https://st-rdap.infra.tld.ee/rdap/domain/example.ee | jq .
+      responses:
+        '200':
+          description: The domain object, filtered to the caller's disclosure tier.
+          content:
+            application/rdap+json:
+              schema:
+                $ref: '#/components/schemas/Domain'
+              examples:
+                anonymous_natural_person:
+                  summary: Anonymous tier — natural-person PII redacted
+                  value:
+                    rdapConformance: ["rdap_level_0"]
+                    objectClassName: domain
+                    ldhName: kodu.ee
+                    status: [active]
+                    entities:
+                      - objectClassName: entity
+                        roles: [registrant]
+                        vcardArray:
+                          - vcard
+                          - - [version, {}, text, "4.0"]
+                            - [kind, {}, text, individual]
+                      - objectClassName: entity
+                        roles: [administrative]
+                        vcardArray:
+                          - vcard
+                          - - [version, {}, text, "4.0"]
+                            - [kind, {}, text, individual]
+                      - objectClassName: entity
+                        roles: [registrar]
+                        vcardArray:
+                          - vcard
+                          - - [version, {}, text, "4.0"]
+                            - [fn, {}, text, Example Registrar Ltd]
+                            - [tel, {}, uri, "tel:+372.6000000"]
+                        links:
+                          - rel: about
+                            href: https://registrar.example.ee
+                    events:
+                      - eventAction: registration
+                        eventDate: "2018-07-01T10:15:00+03:00"
+                      - eventAction: expiration
+                        eventDate: "2025-07-01T00:00:00Z"
+                      - eventAction: last changed
+                        eventDate: "2023-11-20T08:00:00+02:00"
+                    nameservers:
+                      - objectClassName: nameserver
+                        ldhName: ns1.example.ee
+                      - objectClassName: nameserver
+                        ldhName: ns2.example.ee
+                    secureDNS:
+                      delegationSigned: false
+                    links:
+                      - value: https://st-rdap.infra.tld.ee/rdap/domain/kodu.ee
+                        rel: self
+                        href: https://st-rdap.infra.tld.ee/rdap/domain/kodu.ee
+                        type: application/rdap+json
+                    lang: en
+                    redacted:
+                      - name: { type: Registrant Name }
+                        prePath: "$.entities[?(@.roles[0]=='registrant')].vcardArray[1][?(@[0]=='fn')]"
+                        method: removal
+                        reason: { description: Registrant name redacted for privacy. }
+                      - name: { type: Registrant Email }
+                        prePath: "$.entities[?(@.roles[0]=='registrant')].vcardArray[1][?(@[0]=='email')]"
+                        method: removal
+                        reason: { description: Registrant email redacted for privacy. }
+                      - name: { type: Registrant Phone }
+                        prePath: "$.entities[?(@.roles[0]=='registrant')].vcardArray[1][?(@[0]=='tel')]"
+                        method: removal
+                        reason: { description: Registrant phone redacted for privacy. }
+                      - name: { type: Administrative and Technical Contact Name and Email }
+                        prePath: "$.entities[?(@.roles[0]=='administrative' || @.roles[0]=='technical')].vcardArray[1][?(@[0]=='fn' || @[0]=='email')]"
+                        method: removal
+                        reason: { description: Administrative and technical contact name and email redacted for privacy. }
+                anonymous_legal_person:
+                  summary: Anonymous tier — legal-person registrant (org contacts shown), DNSSEC signed
+                  value:
+                    rdapConformance: ["rdap_level_0"]
+                    objectClassName: domain
+                    ldhName: xn--nide-loa.ee
+                    unicodeName: näide.ee
+                    status: [active]
+                    entities:
+                      - objectClassName: entity
+                        roles: [registrant]
+                        vcardArray:
+                          - vcard
+                          - - [version, {}, text, "4.0"]
+                            - [fn, {}, text, Example Org OÜ]
+                            - [kind, {}, text, org]
+                            - [org, {}, text, Example Org OÜ]
+                            - [email, {}, text, registrant@example.ee]
+                            - [tel, {}, uri, "tel:+372.6112233"]
+                        publicIds:
+                          - { type: ee-registry-code, identifier: "12345678" }
+                      - objectClassName: entity
+                        roles: [registrar]
+                        vcardArray:
+                          - vcard
+                          - - [version, {}, text, "4.0"]
+                            - [fn, {}, text, Example Registrar Ltd]
+                            - [tel, {}, uri, "tel:+372.6000000"]
+                        links:
+                          - rel: about
+                            href: https://registrar.example.ee
+                    events:
+                      - eventAction: registration
+                        eventDate: "2015-03-14T09:00:00+02:00"
+                      - eventAction: expiration
+                        eventDate: "2026-03-14T00:00:00Z"
+                      - eventAction: last changed
+                        eventDate: "2024-01-02T12:30:00+02:00"
+                    nameservers:
+                      - objectClassName: nameserver
+                        ldhName: ns1.example.ee
+                      - objectClassName: nameserver
+                        ldhName: ns.xn--nide-loa.ee
+                        unicodeName: ns.näide.ee
+                    secureDNS:
+                      delegationSigned: true
+                      keyData:
+                        - { flags: 257, protocol: 3, algorithm: 8, publicKey: AwEAAcabcDEF1234567890publickeyMaterialAAAA }
+                    links:
+                      - value: https://st-rdap.infra.tld.ee/rdap/domain/xn--nide-loa.ee
+                        rel: self
+                        href: https://st-rdap.infra.tld.ee/rdap/domain/xn--nide-loa.ee
+                        type: application/rdap+json
+                    lang: en
+                authenticated:
+                  summary: Authenticated tier — registrant contact disclosed
+                  value:
+                    rdapConformance: ["rdap_level_0"]
+                    objectClassName: domain
+                    ldhName: kodu.ee
+                    status: [active]
+                    entities:
+                      - objectClassName: entity
+                        roles: [registrant]
+                        vcardArray:
+                          - vcard
+                          - - [version, {}, text, "4.0"]
+                            - [fn, {}, text, Jaan Tamm]
+                            - [kind, {}, text, individual]
+                            - [email, {}, text, jaan@example.ee]
+                            - [tel, {}, uri, "tel:+372.5551234"]
+                      - objectClassName: entity
+                        roles: [administrative]
+                        vcardArray:
+                          - vcard
+                          - - [version, {}, text, "4.0"]
+                            - [kind, {}, text, individual]
+                    events:
+                      - eventAction: registration
+                        eventDate: "2018-07-01T10:15:00+03:00"
+                      - eventAction: expiration
+                        eventDate: "2025-07-01T00:00:00Z"
+                    nameservers:
+                      - objectClassName: nameserver
+                        ldhName: ns1.example.ee
+                    secureDNS:
+                      delegationSigned: false
+                    links:
+                      - value: https://st-rdap.infra.tld.ee/rdap/domain/kodu.ee
+                        rel: self
+                        href: https://st-rdap.infra.tld.ee/rdap/domain/kodu.ee
+                        type: application/rdap+json
+                    lang: en
+                    redacted:
+                      - name: { type: Administrative and Technical Contact Name and Email }
+                        prePath: "$.entities[?(@.roles[0]=='administrative' || @.roles[0]=='technical')].vcardArray[1][?(@[0]=='fn' || @[0]=='email')]"
+                        method: removal
+                        reason: { description: Administrative and technical contact name and email redacted for privacy. }
+                privileged:
+                  summary: Privileged tier — full data, no redaction, legal-basis notice
+                  value:
+                    rdapConformance: ["rdap_level_0"]
+                    objectClassName: domain
+                    ldhName: kodu.ee
+                    status: [active]
+                    entities:
+                      - objectClassName: entity
+                        roles: [registrant]
+                        vcardArray:
+                          - vcard
+                          - - [version, {}, text, "4.0"]
+                            - [fn, {}, text, Jaan Tamm]
+                            - [kind, {}, text, individual]
+                            - [email, {}, text, jaan@example.ee]
+                            - [tel, {}, uri, "tel:+372.5551234"]
+                            - [adr, { type: work }, text, ["", "", "Tamme 1", "Tallinn", "", "10111", "EE"]]
+                        publicIds:
+                          - { type: ee-identity-code, identifier: "38001085718" }
+                          - { type: ee-identity-country, identifier: EE }
+                        events:
+                          - eventAction: last changed
+                            eventDate: "2024-03-15T10:00:00Z"
+                    events:
+                      - eventAction: registration
+                        eventDate: "2018-07-01T07:15:00Z"
+                      - eventAction: expiration
+                        eventDate: "2025-07-01T00:00:00Z"
+                    nameservers:
+                      - objectClassName: nameserver
+                        ldhName: ns1.example.ee
+                        ipAddresses:
+                          v4: ["192.0.2.1", "192.0.2.2"]
+                          v6: ["2001:db8::1"]
+                    secureDNS:
+                      delegationSigned: true
+                      keyData:
+                        - { flags: 257, protocol: 3, algorithm: 8, publicKey: AwEAAcabcDEFtest }
+                      dsData:
+                        - { keyTag: 12345, algorithm: 8, digestType: 2, digest: AABBCCDDEEFF0011 }
+                    links:
+                      - value: https://st-rdap.infra.tld.ee/rdap/domain/kodu.ee
+                        rel: self
+                        href: https://st-rdap.infra.tld.ee/rdap/domain/kodu.ee
+                        type: application/rdap+json
+                    lang: en
+                    notices:
+                      - title: Privileged Access
+                        description:
+                          - >-
+                            This response was produced under an active authorisation grant and
+                            discloses data fields not available to anonymous or authenticated
+                            callers. (Legal-basis text pending sign-off — placeholder.)
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /rdap/nameserver/{name}:
+    get:
+      tags: [Optional lookups]
+      summary: Look up a nameserver (optional, flag-gated)
+      operationId: getNameserver
+      description: |
+        Returns the RFC 9083 nameserver object for a host name. **Optional endpoint** — gated
+        by a server feature flag. When the flag is **off**, this path returns `501 Not
+        Implemented` for every method.
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: The nameserver host name (A-label).
+          schema: { type: string }
+          example: ns1.example.ee
+      responses:
+        '200':
+          description: The nameserver object.
+          content:
+            application/rdap+json:
+              schema: { $ref: '#/components/schemas/Nameserver' }
+              example:
+                rdapConformance: ["rdap_level_0"]
+                objectClassName: nameserver
+                ldhName: ns1.example.ee
+                lang: en
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
+  /rdap/entity/{handle}:
+    get:
+      tags: [Optional lookups]
+      summary: Look up an entity / registrar (optional, flag-gated)
+      operationId: getEntity
+      description: |
+        Returns the RFC 9083 entity object for a handle (e.g. a registrar code). **Optional
+        endpoint** — gated by a server feature flag; returns `501` for every method when off.
+      parameters:
+        - name: handle
+          in: path
+          required: true
+          description: The entity handle (registrar code).
+          schema: { type: string }
+          example: REG-001
+      responses:
+        '200':
+          description: The entity object.
+          content:
+            application/rdap+json:
+              schema: { $ref: '#/components/schemas/EntityObject' }
+              example:
+                rdapConformance: ["rdap_level_0"]
+                objectClassName: entity
+                handle: REG-001
+                roles: [registrar]
+                vcardArray:
+                  - vcard
+                  - - [version, {}, text, "4.0"]
+                    - [fn, {}, text, Example Registrar Ltd]
+                publicIds:
+                  - { type: ee-registrar-code, identifier: REG-001 }
+                links:
+                  - value: https://st-rdap.infra.tld.ee/rdap/entity/REG-001
+                    rel: self
+                    href: https://st-rdap.infra.tld.ee/rdap/entity/REG-001
+                    type: application/rdap+json
+                  - rel: about
+                    href: https://registrar.example.ee
+                lang: en
+                notices:
+                  - title: Terms of Service
+                    description:
+                      - This RDAP service provides access to .ee domain registration data.
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
+  /rdap/domains:
+    get:
+      tags: [Optional lookups]
+      summary: Domain search (optional, flag-gated)
+      operationId: searchDomains
+      description: |
+        Searches domains by name pattern (RFC 9082 §3.2.1 / RFC 9083 §8). **Optional
+        endpoint** — gated by a server feature flag; returns `501` for every method when off.
+
+        Each result reuses the exact per-domain shape of `GET /rdap/domain/{name}` (filtered
+        to the caller's disclosure tier) and links to its own exact-lookup URL. If the result
+        set exceeds the server maximum it is shortened and a §9 truncation notice is appended;
+        the response never reveals a total-match count.
+      parameters:
+        - name: name
+          in: query
+          required: true
+          description: The domain name search pattern (may contain `*`).
+          schema: { type: string }
+          example: exam*.ee
+      responses:
+        '200':
+          description: The search-result set.
+          content:
+            application/rdap+json:
+              schema: { $ref: '#/components/schemas/DomainSearchResults' }
+              example:
+                rdapConformance: ["rdap_level_0"]
+                notices:
+                  - title: Search results truncated
+                    type: result set truncated due to excessive load
+                    description:
+                      - The result set exceeded the server maximum and was shortened.
+                      - Narrow the search pattern to retrieve more specific results.
+                domainSearchResults:
+                  - objectClassName: domain
+                    ldhName: example.ee
+                    status: [active]
+                    links:
+                      - value: https://st-rdap.infra.tld.ee/rdap/domain/example.ee
+                        rel: self
+                        href: https://st-rdap.infra.tld.ee/rdap/domain/example.ee
+                        type: application/rdap+json
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
+  /rdap/farv1_session/login:
+    get:
+      tags: [Authentication]
+      summary: eeID login surface (browser)
+      operationId: sessionLogin
+      security:
+        - {}
+      description: |
+        The human-facing eeID login surface (RFC 9560 `farv1`, session-oriented mode). Open
+        this in a browser and sign in with eeID. On success the callback
+        (`/rdap/farv1_session/callback`, the registered OpenID Connect `redirect_uri`,
+        handled by the OmniAuth middleware) establishes a browser session **and returns your
+        eeID `id_token` as plain text** so you can copy it for token-oriented requests:
+
+        ```
+        curl -sS -H "Authorization: Bearer <id_token>" \
+          https://st-rdap.infra.tld.ee/rdap/domain/<name>.ee | jq .
+        ```
+
+        The token is issued and expires by eeID; sign in again to get a fresh one. This is the
+        normal way to obtain a Bearer token — there is no separate token-issuance API.
+      responses:
+        '200':
+          description: The eeID login HTML surface (when not yet signed in).
+          content:
+            text/html: {}
+
+  /rdap/farv1_session/status:
+    get:
+      tags: [Authentication]
+      summary: Current session state
+      operationId: sessionStatus
+      description: Reports the current browser session state. PII-safe — only an `authenticated` boolean.
+      responses:
+        '200':
+          description: Session state.
+          content:
+            application/rdap+json:
+              example: { authenticated: true }
+
+  /rdap/farv1_session/refresh:
+    get:
+      tags: [Authentication]
+      summary: Extend the local session idle clock
+      operationId: sessionRefresh
+      description: |
+        Extends the local session idle timer and reports state. The service keeps **no**
+        OIDC refresh token (data minimisation), so a true token refresh is unavailable;
+        `tokenRefreshSupported` is always `false`. Never errors.
+      responses:
+        '200':
+          description: Session state after refresh.
+          content:
+            application/rdap+json:
+              example: { authenticated: true, refreshed: true, tokenRefreshSupported: false }
+
+  /rdap/farv1_session/logout:
+    get:
+      tags: [Authentication]
+      summary: Sign out
+      operationId: sessionLogout
+      description: |
+        Clears the local session. When the eeID issuer advertises an `end_session_endpoint`,
+        also triggers RP-initiated logout at eeID; otherwise degrades to a local clear and a
+        redirect back. Never errors.
+      responses:
+        '302':
+          description: Redirect to the eeID end-session endpoint or back to the login surface.
+
+  /up:
+    get:
+      tags: [Operations]
+      summary: Health check (non-RDAP)
+      operationId: health
+      security:
+        - {}
+      description: Liveness probe — checks database and Redis reachability. Not an RDAP endpoint.
+      responses:
+        '200':
+          description: Service healthy.
+        '503':
+          description: A dependency (database or Redis) is unavailable.
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        An eeID `id_token` (RS256 JWT) obtained from `/rdap/farv1_session/login`. Optional:
+        when present and valid it elevates the response to the authenticated tier, and to the
+        privileged tier if an active registry grant exists for the token's subject.
+
+  parameters:
+    DomainName:
+      name: name
+      in: path
+      required: true
+      description: The `.ee` domain name, as an A-label (`xn--nide-loa.ee`) or U-label (`näide.ee`).
+      schema:
+        type: string
+      example: example.ee
+
+  responses:
+    NotFound:
+      description: |
+        Not found / out of scope. Returned for an unknown record **or** a syntactically valid
+        but non-`.ee` (out-of-scope) exact lookup. The message is generic and never reveals
+        whether a specific record exists.
+      content:
+        application/rdap+json:
+          schema: { $ref: '#/components/schemas/RdapError' }
+          example:
+            rdapConformance: ["rdap_level_0"]
+            lang: en
+            errorCode: 404
+            title: Not Found
+            description: ["The requested object does not exist or is out of scope."]
+    MethodNotAllowed:
+      description: The HTTP method is not allowed on this path (only `GET`/`HEAD` are).
+      content:
+        application/rdap+json:
+          schema: { $ref: '#/components/schemas/RdapError' }
+          example:
+            rdapConformance: ["rdap_level_0"]
+            lang: en
+            errorCode: 405
+            title: Method Not Allowed
+            description: ["This method is not supported on this resource."]
+    TooManyRequests:
+      description: Rate limit exceeded. Carries a `Retry-After` header (RFC 6585 §4).
+      headers:
+        Retry-After:
+          description: Seconds (or an HTTP-date) until the caller may retry.
+          schema: { type: string }
+          example: "60"
+      content:
+        application/rdap+json:
+          schema: { $ref: '#/components/schemas/RdapError' }
+          example:
+            rdapConformance: ["rdap_level_0"]
+            lang: en
+            errorCode: 429
+            title: Too Many Requests
+            description: ["Rate limit exceeded. Retry after the period indicated by the Retry-After header."]
+    NotImplemented:
+      description: |
+        Not implemented. Returned for an unimplemented RDAP query type (e.g. `autnum`, `ip`)
+        **or** for an optional endpoint whose server feature flag is disabled.
+      content:
+        application/rdap+json:
+          schema: { $ref: '#/components/schemas/RdapError' }
+          example:
+            rdapConformance: ["rdap_level_0"]
+            lang: en
+            errorCode: 501
+            title: Not Implemented
+            description: ["This query type is not supported by this service."]
+
+  schemas:
+    RdapConformance:
+      type: array
+      items: { type: string }
+      description: RDAP extension identifiers supported by the response.
+      example: ["rdap_level_0"]
+
+    Link:
+      type: object
+      description: An RFC 8288 web link.
+      properties:
+        value: { type: string, format: uri }
+        rel: { type: string, example: self }
+        href: { type: string, format: uri }
+        type: { type: string, example: application/rdap+json }
+
+    Notice:
+      type: object
+      properties:
+        title: { type: string }
+        type:
+          type: string
+          description: Present on machine-typed notices (e.g. a truncation notice).
+        description:
+          type: array
+          items: { type: string }
+        links:
+          type: array
+          items: { $ref: '#/components/schemas/Link' }
+
+    Event:
+      type: object
+      properties:
+        eventAction:
+          type: string
+          description: e.g. `registration`, `expiration`, `last changed`.
+        eventDate: { type: string, format: date-time }
+
+    VcardArray:
+      type: array
+      description: >-
+        A jCard (RFC 7095): the two-element array `["vcard", [ [property, params, type,
+        value], ... ]]`. Disclosure removes natural-person `fn`/`email`/`tel` for callers
+        below the required tier.
+      example:
+        - vcard
+        - - [version, {}, text, "4.0"]
+          - [fn, {}, text, Example Org OÜ]
+          - [kind, {}, text, org]
+
+    Entity:
+      type: object
+      properties:
+        objectClassName: { type: string, example: entity }
+        roles:
+          type: array
+          items: { type: string }
+          description: e.g. `registrant`, `administrative`, `technical`, `registrar`.
+        vcardArray: { $ref: '#/components/schemas/VcardArray' }
+        publicIds:
+          type: array
+          items:
+            type: object
+            properties:
+              type: { type: string, example: ee-registry-code }
+              identifier: { type: string }
+        events:
+          type: array
+          description: Per-entity events (privileged tier).
+          items: { $ref: '#/components/schemas/Event' }
+        links:
+          type: array
+          items: { $ref: '#/components/schemas/Link' }
+
+    Nameserver:
+      type: object
+      properties:
+        objectClassName: { type: string, example: nameserver }
+        ldhName: { type: string, example: ns1.example.ee }
+        unicodeName: { type: string }
+        ipAddresses:
+          type: object
+          description: Nameserver glue addresses (privileged tier).
+          properties:
+            v4: { type: array, items: { type: string } }
+            v6: { type: array, items: { type: string } }
+
+    SecureDNS:
+      type: object
+      properties:
+        delegationSigned: { type: boolean }
+        keyData:
+          type: array
+          items:
+            type: object
+            properties:
+              flags: { type: integer, example: 257 }
+              protocol: { type: integer, example: 3 }
+              algorithm: { type: integer, example: 8 }
+              publicKey: { type: string }
+        dsData:
+          type: array
+          description: DS records (privileged tier).
+          items:
+            type: object
+            properties:
+              keyTag: { type: integer }
+              algorithm: { type: integer }
+              digestType: { type: integer }
+              digest: { type: string }
+
+    Redaction:
+      type: object
+      description: An RFC 9083 §10 redaction record describing a withheld field.
+      properties:
+        name:
+          type: object
+          properties:
+            type: { type: string }
+        prePath:
+          type: string
+          description: JSONPath to the redacted member.
+        method: { type: string, example: removal }
+        reason:
+          type: object
+          properties:
+            description: { type: string }
+
+    Domain:
+      type: object
+      description: An RFC 9083 §5.3 domain object, filtered to the caller's disclosure tier.
+      properties:
+        rdapConformance: { $ref: '#/components/schemas/RdapConformance' }
+        objectClassName: { type: string, example: domain }
+        ldhName: { type: string, example: example.ee }
+        unicodeName: { type: string, description: Present for IDN names. }
+        status:
+          type: array
+          items: { type: string }
+          description: The `.ee` status values mapped to the RDAP vocabulary, e.g. `active`.
+        entities:
+          type: array
+          items: { $ref: '#/components/schemas/Entity' }
+        events:
+          type: array
+          items: { $ref: '#/components/schemas/Event' }
+        nameservers:
+          type: array
+          items: { $ref: '#/components/schemas/Nameserver' }
+        secureDNS: { $ref: '#/components/schemas/SecureDNS' }
+        links:
+          type: array
+          items: { $ref: '#/components/schemas/Link' }
+        lang: { type: string, example: en }
+        notices:
+          type: array
+          description: Present on the privileged tier (the Privileged Access notice).
+          items: { $ref: '#/components/schemas/Notice' }
+        redacted:
+          type: array
+          description: Present when fields were withheld (anonymous / authenticated tiers).
+          items: { $ref: '#/components/schemas/Redaction' }
+
+    EntityObject:
+      type: object
+      properties:
+        rdapConformance: { $ref: '#/components/schemas/RdapConformance' }
+        objectClassName: { type: string, example: entity }
+        handle: { type: string }
+        roles:
+          type: array
+          items: { type: string }
+        vcardArray: { $ref: '#/components/schemas/VcardArray' }
+        publicIds:
+          type: array
+          items:
+            type: object
+            properties:
+              type: { type: string, example: ee-registrar-code }
+              identifier: { type: string }
+        links:
+          type: array
+          items: { $ref: '#/components/schemas/Link' }
+        lang: { type: string, example: en }
+        notices:
+          type: array
+          items: { $ref: '#/components/schemas/Notice' }
+
+    DomainSearchResults:
+      type: object
+      properties:
+        rdapConformance: { $ref: '#/components/schemas/RdapConformance' }
+        notices:
+          type: array
+          items: { $ref: '#/components/schemas/Notice' }
+        domainSearchResults:
+          type: array
+          items: { $ref: '#/components/schemas/Domain' }
+
+    Help:
+      type: object
+      properties:
+        rdapConformance: { $ref: '#/components/schemas/RdapConformance' }
+        lang: { type: string, example: en }
+        links:
+          type: array
+          items: { $ref: '#/components/schemas/Link' }
+        farv1_openidcConfiguration:
+          type: object
+          description: RFC 9560 federated-authentication configuration. Present only when eeID is enabled.
+          properties:
+            sessionClientSupported: { type: boolean }
+            tokenClientSupported: { type: boolean }
+            dntSupported: { type: boolean }
+            providerDiscoverySupported: { type: boolean }
+            issuerIdentifierSupported: { type: boolean }
+            openidcProviders:
+              type: array
+              items:
+                type: object
+                properties:
+                  iss: { type: string, format: uri }
+                  name: { type: string, example: eeID }
+                  default: { type: boolean }
+        notices:
+          type: array
+          items: { $ref: '#/components/schemas/Notice' }
+
+    RdapError:
+      type: object
+      description: The shared RFC 9083 §6 error document used by every error response.
+      properties:
+        rdapConformance: { $ref: '#/components/schemas/RdapConformance' }
+        lang: { type: string, example: en }
+        errorCode: { type: integer, example: 404 }
+        title: { type: string, example: Not Found }
+        description:
+          type: array
+          items: { type: string }
