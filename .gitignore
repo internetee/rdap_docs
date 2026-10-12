@@ -1,1 +1,4 @@
 node_modules
+.repowise/
+.playwright-cli/
+.memory-bank/

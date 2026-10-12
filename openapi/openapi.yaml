@@ -33,6 +33,27 @@ info:
     `.ee` registration data contains personal data. What a caller sees depends on **who they
     are**, in three tiers:
 
+    Production activation is planned for **2027-01-18**, at the release-plan timestamp in
+    `DISCLOSURE_POLICY_ACTIVE_FROM`. Unset/future serves legacy; at/after the boot-parsed instant
+    lookup and enabled search use the 2027 policy. Malformed timestamps fail boot.
+
+    | 2027 tier | Who | What is disclosed |
+    |-----------|-----|-------------------|
+    | **Public** | Anonymous | Domain registration/expiration and technical data; per-contact volunteered name/email/phone only (publishable AND disclosed). Registrant kind always; no registry code/country, domain last changed/outzone/delete or entity change dates. |
+    | **Detailed** | Authenticated | Public plus domain last changed/outzone/delete; org registrant name/code/country/email, phone if system-matched or volunteered; org tech name/email/phone. Private registrants, all admins and private/missing-kind tech remain volunteered-only. |
+    | **Privileged** | Active grant + enabled privileged disclosure | Every value available in the blob, all entity dates and date remarks, org contact codes/countries; no redacted member, lookup Privileged Access notice. Disabled flag falls back to detailed. |
+
+    System-matched registrant phone is **not** public consent. Each contact uses its own kind/gates.
+    Registrar email/formatted address and nameserver `ipAddresses` are shown at all 2027 tiers when
+    present. Older blobs fall back to hostnames without IPs, no registrar email/address and individual
+    contacts. Missing fields have no phantom redaction. Natural-person identity codes/full addresses,
+    registrar registry numbers and DS data are absent from the blob and never fetched elsewhere.
+    Inactive public/detailed domains have the bare name/status/links/lang shape with no redacted;
+    privileged keeps the full mapping. Detailed/privileged 200 lookup/search responses use
+    `Cache-Control: private, no-store` from deploy under both policies.
+
+    **Legacy policy — until activation (planned 2027-01-18), or while the switch is unset/future:**
+
     | Tier | Who | What is disclosed |
     |------|-----|-------------------|
     | **Anonymous** (default) | Any unauthenticated caller | Domain technical data + organisation (legal-person) contacts. **Natural-person registrant/contact name, e-mail and phone are removed**, and a `redacted[]` array (RFC 9537) describes what was withheld. |
@@ -239,21 +260,12 @@ paths:
         Returns the RFC 9083 domain object for an exact `.ee` domain name. The `name` may be
         an A-label (`xn--nide-loa.ee`) or a U-label / Unicode form (`näide.ee`).
 
-        **The response depends on your access tier** (see the three examples):
-
-        * **Anonymous** — organisation contacts are shown; natural-person registrant/contact
-          name, e-mail and phone are removed, and a `redacted[]` array describes what was
-          withheld.
-        * **Authenticated** (valid RDAP-issued Bearer token) — for an **ORG-registrant**
-          domain additionally discloses the organisation registrant's e-mail & phone and the
-          full administrative/technical contacts; a natural-person-registrant domain is
-          identical to anonymous.
-        * **Privileged** (active registry grant) — the natural-person **registrant,
-          administrative and technical** contact name, e-mail and phone that lower tiers
-          redact are unmasked, there is **no `redacted[]`**, and a *Privileged Access* notice
-          records the legal basis. All structural fields (status, domain events, nameserver
-          host names, DNSKEY `keyData`) are the same as the other tiers — the service holds no
-          glue IP addresses, postal addresses, national identity codes or DS records.
+        The selected policy follows `DISCLOSURE_POLICY_ACTIVE_FROM` (planned production
+        activation 2027-01-18). The 2027 examples show public / detailed / privileged field maps
+        above. Privileged requires an active grant AND enabled disclosure, otherwise detailed.
+        Existing examples are retained as legacy until activation. Hidden names keep empty `fn`
+        with `emptyValue`; other withheld fields are omitted with `removal`. Registrar email/label
+        ADR and nameserver IPs are all-tier additions; organization country ADR uses `cc`.
 
         `GET` also serves `HEAD`. `POST/PUT/PATCH/DELETE` return `405`. A syntactically valid
         but non-`.ee` name is out of scope and returns `404`.
@@ -272,13 +284,862 @@ paths:
       responses:
         '200':
           description: The domain object, filtered to the caller's disclosure tier.
+          headers:
+            Cache-Control:
+              description: Public max-age=0, private, must-revalidate; detailed/privileged private, no-store (both policies).
+              schema: { type: string }
           content:
             application/rdap+json:
               schema:
                 $ref: '#/components/schemas/Domain'
               examples:
+                policy2027_public_org_closed:
+                  summary: 2027 public — org gates closed, system phone matched
+                  value:
+                    rdapConformance:
+                    - rdap_level_0
+                    - redacted
+                    objectClassName: domain
+                    ldhName: policy-org-closed.ee
+                    status:
+                    - active
+                    entities:
+                    - objectClassName: entity
+                      roles:
+                      - registrant
+                      vcardArray:
+                      - vcard
+                      - - - version
+                          - {}
+                          - text
+                          - '4.0'
+                        - - fn
+                          - {}
+                          - text
+                          - ''
+                        - - kind
+                          - {}
+                          - text
+                          - org
+                    - objectClassName: entity
+                      roles:
+                      - administrative
+                      vcardArray:
+                      - vcard
+                      - - - version
+                          - {}
+                          - text
+                          - '4.0'
+                        - - fn
+                          - {}
+                          - text
+                          - ''
+                        - - kind
+                          - {}
+                          - text
+                          - org
+                    - objectClassName: entity
+                      roles:
+                      - administrative
+                      vcardArray:
+                      - vcard
+                      - - - version
+                          - {}
+                          - text
+                          - '4.0'
+                        - - fn
+                          - {}
+                          - text
+                          - Private Admin
+                        - - kind
+                          - {}
+                          - text
+                          - individual
+                        - - email
+                          - {}
+                          - text
+                          - admin@example.test
+                        - - tel
+                          - {}
+                          - uri
+                          - tel:+372.6111222
+                    - objectClassName: entity
+                      roles:
+                      - technical
+                      vcardArray:
+                      - vcard
+                      - - - version
+                          - {}
+                          - text
+                          - '4.0'
+                        - - fn
+                          - {}
+                          - text
+                          - ''
+                        - - kind
+                          - {}
+                          - text
+                          - org
+                    - objectClassName: entity
+                      roles:
+                      - registrar
+                      vcardArray:
+                      - vcard
+                      - - - version
+                          - {}
+                          - text
+                          - '4.0'
+                        - - fn
+                          - {}
+                          - text
+                          - Example Registrar Ltd
+                        - - email
+                          - {}
+                          - text
+                          - registrar@example.test
+                        - - tel
+                          - {}
+                          - uri
+                          - tel:+372.6000000
+                        - - adr
+                          - label: Example street, Tallinn, 10111
+                          - text
+                          - - ''
+                            - ''
+                            - ''
+                            - ''
+                            - ''
+                            - ''
+                            - ''
+                      links:
+                      - rel: about
+                        href: https://registrar.example.ee
+                    events:
+                    - eventAction: registration
+                      eventDate: '2015-03-14T09:00:00+02:00'
+                    - eventAction: expiration
+                      eventDate: '2026-03-14T00:00:00Z'
+                    nameservers:
+                    - objectClassName: nameserver
+                      ldhName: ns1.example.ee
+                      ipAddresses:
+                        v4:
+                        - 1.1.1.1
+                        v6:
+                        - 2606:4700:4700::1111
+                    - objectClassName: nameserver
+                      ldhName: ns.xn--nide-loa.ee
+                      unicodeName: ns.näide.ee
+                      ipAddresses:
+                        v4:
+                        - 8.8.8.8
+                    secureDNS:
+                      delegationSigned: true
+                      keyData:
+                      - flags: 257
+                        protocol: 3
+                        algorithm: 8
+                        publicKey: AwEAAcabcDEF1234567890publickeyMaterialAAAA
+                      - flags: 256
+                        protocol: 3
+                        algorithm: 13
+                        publicKey: AwEAAbcdEFG0987654321otherKeyMaterialBBBB
+                    links:
+                    - value: https://st-rdap.infra.tld.ee/rdap/domain/policy-org-closed.ee
+                      rel: self
+                      href: https://st-rdap.infra.tld.ee/rdap/domain/policy-org-closed.ee
+                      type: application/rdap+json
+                    lang: en
+                    redacted:
+                    - name:
+                        type: Registrant Name
+                      postPath: $.entities[?(@.roles[0]=='registrant')].vcardArray[1][?(@[0]=='fn')][3]
+                      method: emptyValue
+                      reason:
+                        description: Registrant name redacted for privacy.
+                    - name:
+                        type: Registrant Organization
+                      prePath: $.entities[?(@.roles[0]=='registrant')].vcardArray[1][?(@[0]=='org')]
+                      method: removal
+                      reason:
+                        description: Registrant Organization is available to authenticated users only.
+                    - name:
+                        type: Registrant Email
+                      prePath: $.entities[?(@.roles[0]=='registrant')].vcardArray[1][?(@[0]=='email')]
+                      method: removal
+                      reason:
+                        description: Registrant email redacted for privacy.
+                    - name:
+                        type: Registrant Phone
+                      prePath: $.entities[?(@.roles[0]=='registrant')].vcardArray[1][?(@[0]=='tel')]
+                      method: removal
+                      reason:
+                        description: Registrant phone redacted for privacy.
+                    - name:
+                        description: Registrant Registry Code
+                      prePath: $.entities[?(@.roles[0]=='registrant')].publicIds
+                      method: removal
+                      reason:
+                        description: Registrant Registry Code is available to authenticated users only.
+                    - name:
+                        description: Registrant Country
+                      prePath: $.entities[?(@.roles[0]=='registrant')].vcardArray[1][?(@[0]=='adr')]
+                      method: removal
+                      reason:
+                        description: Registrant Country is available to authenticated users only.
+                    - name:
+                        description: Registrant Last Changed Date
+                      prePath: $.entities[?(@.roles[0]=='registrant')].events[?(@.eventAction=='last changed')]
+                      method: removal
+                      reason:
+                        description: Registrant last-changed timestamp is available to privileged users only.
+                    - name:
+                        description: Administrative Contact Name
+                      postPath: $.entities[?(@.roles[0]=='administrative')].vcardArray[1][?(@[0]=='fn')][3]
+                      method: emptyValue
+                      reason:
+                        description: Administrative contact name redacted for privacy.
+                    - name:
+                        description: Administrative Contact Email
+                      prePath: $.entities[?(@.roles[0]=='administrative')].vcardArray[1][?(@[0]=='email')]
+                      method: removal
+                      reason:
+                        description: Administrative contact email redacted for privacy.
+                    - name:
+                        description: Administrative Contact Phone
+                      prePath: $.entities[?(@.roles[0]=='administrative')].vcardArray[1][?(@[0]=='tel')]
+                      method: removal
+                      reason:
+                        description: Administrative Contact Phone redacted for privacy.
+                    - name:
+                        description: Administrative Contact Registry Code
+                      prePath: $.entities[?(@.roles[0]=='administrative')].publicIds
+                      method: removal
+                      reason:
+                        description: Administrative Contact Registry Code is available to privileged users only.
+                    - name:
+                        description: Administrative Contact Country
+                      prePath: $.entities[?(@.roles[0]=='administrative')].vcardArray[1][?(@[0]=='adr')]
+                      method: removal
+                      reason:
+                        description: Administrative Contact Country is available to privileged users only.
+                    - name:
+                        description: Administrative Contact Last Changed Date
+                      prePath: $.entities[?(@.roles[0]=='administrative')].events[?(@.eventAction=='last changed')]
+                      method: removal
+                      reason:
+                        description: Administrative contact last-changed timestamp is available to privileged users only.
+                    - name:
+                        type: Tech Name
+                      postPath: $.entities[?(@.roles[0]=='technical')].vcardArray[1][?(@[0]=='fn')][3]
+                      method: emptyValue
+                      reason:
+                        description: Technical contact name redacted for privacy.
+                    - name:
+                        type: Tech Email
+                      prePath: $.entities[?(@.roles[0]=='technical')].vcardArray[1][?(@[0]=='email')]
+                      method: removal
+                      reason:
+                        description: Technical contact email redacted for privacy.
+                    - name:
+                        type: Tech Phone
+                      prePath: $.entities[?(@.roles[0]=='technical')].vcardArray[1][?(@[0]=='tel')]
+                      method: removal
+                      reason:
+                        description: Tech Phone redacted for privacy.
+                    - name:
+                        description: Technical Contact Registry Code
+                      prePath: $.entities[?(@.roles[0]=='technical')].publicIds
+                      method: removal
+                      reason:
+                        description: Technical Contact Registry Code is available to privileged users only.
+                    - name:
+                        description: Technical Contact Country
+                      prePath: $.entities[?(@.roles[0]=='technical')].vcardArray[1][?(@[0]=='adr')]
+                      method: removal
+                      reason:
+                        description: Technical Contact Country is available to privileged users only.
+                    - name:
+                        description: Technical Contact Last Changed Date
+                      prePath: $.entities[?(@.roles[0]=='technical')].events[?(@.eventAction=='last changed')]
+                      method: removal
+                      reason:
+                        description: Technical contact last-changed timestamp is available to privileged users only.
+                    - name:
+                        description: Registrar Last Changed Date
+                      prePath: $.entities[?(@.roles[0]=='registrar')].events[?(@.eventAction=='last changed')]
+                      method: removal
+                      reason:
+                        description: Registrar Last Changed Date is available to privileged users only.
+                    - name:
+                        description: Domain Last Changed Date
+                      prePath: $.events[?(@.eventAction=='last changed')]
+                      method: removal
+                      reason:
+                        description: Domain Last Changed Date is available to authenticated users only.
+                    - name:
+                        description: Out of Zone Date
+                      prePath: $.remarks[?(@.title=='Out of Zone Date')]
+                      method: removal
+                      reason:
+                        description: Out of Zone Date is available to authenticated users only.
+                    - name:
+                        description: Deletion Date
+                      prePath: $.remarks[?(@.title=='Deletion Date')]
+                      method: removal
+                      reason:
+                        description: Deletion Date is available to authenticated users only.
+                    - name:
+                        description: Nameservers Last Changed Date
+                      prePath: $.remarks[?(@.title=='Nameservers Last Changed')]
+                      method: removal
+                      reason:
+                        description: Nameservers Last Changed Date is available to privileged users only.
+                    - name:
+                        description: DNSSEC Last Changed Date
+                      prePath: $.remarks[?(@.title=='DNSSEC Last Changed')]
+                      method: removal
+                      reason:
+                        description: DNSSEC Last Changed Date is available to privileged users only.
+                    notices: []
+                policy2027_detailed_org_closed:
+                  summary: 2027 detailed — org gates closed, system phone matched
+                  value:
+                    rdapConformance:
+                    - rdap_level_0
+                    - redacted
+                    objectClassName: domain
+                    ldhName: policy-org-closed.ee
+                    status:
+                    - active
+                    entities:
+                    - objectClassName: entity
+                      roles:
+                      - registrant
+                      vcardArray:
+                      - vcard
+                      - - - version
+                          - {}
+                          - text
+                          - '4.0'
+                        - - fn
+                          - {}
+                          - text
+                          - Example Org OÜ
+                        - - kind
+                          - {}
+                          - text
+                          - org
+                        - - org
+                          - {}
+                          - text
+                          - Example Org OÜ
+                        - - email
+                          - {}
+                          - text
+                          - registrant@example.ee
+                        - - tel
+                          - {}
+                          - uri
+                          - tel:+372.6112233
+                        - - adr
+                          - cc: EE
+                          - text
+                          - - ''
+                            - ''
+                            - ''
+                            - ''
+                            - ''
+                            - ''
+                            - ''
+                      publicIds:
+                      - type: ee-registry-code
+                        identifier: '12345678'
+                    - objectClassName: entity
+                      roles:
+                      - administrative
+                      vcardArray:
+                      - vcard
+                      - - - version
+                          - {}
+                          - text
+                          - '4.0'
+                        - - fn
+                          - {}
+                          - text
+                          - ''
+                        - - kind
+                          - {}
+                          - text
+                          - org
+                    - objectClassName: entity
+                      roles:
+                      - administrative
+                      vcardArray:
+                      - vcard
+                      - - - version
+                          - {}
+                          - text
+                          - '4.0'
+                        - - fn
+                          - {}
+                          - text
+                          - Private Admin
+                        - - kind
+                          - {}
+                          - text
+                          - individual
+                        - - email
+                          - {}
+                          - text
+                          - admin@example.test
+                        - - tel
+                          - {}
+                          - uri
+                          - tel:+372.6111222
+                    - objectClassName: entity
+                      roles:
+                      - technical
+                      vcardArray:
+                      - vcard
+                      - - - version
+                          - {}
+                          - text
+                          - '4.0'
+                        - - fn
+                          - {}
+                          - text
+                          - Tech One
+                        - - kind
+                          - {}
+                          - text
+                          - org
+                        - - email
+                          - {}
+                          - text
+                          - tech1@example.ee
+                        - - tel
+                          - {}
+                          - uri
+                          - tel:+372.6122222
+                    - objectClassName: entity
+                      roles:
+                      - registrar
+                      vcardArray:
+                      - vcard
+                      - - - version
+                          - {}
+                          - text
+                          - '4.0'
+                        - - fn
+                          - {}
+                          - text
+                          - Example Registrar Ltd
+                        - - email
+                          - {}
+                          - text
+                          - registrar@example.test
+                        - - tel
+                          - {}
+                          - uri
+                          - tel:+372.6000000
+                        - - adr
+                          - label: Example street, Tallinn, 10111
+                          - text
+                          - - ''
+                            - ''
+                            - ''
+                            - ''
+                            - ''
+                            - ''
+                            - ''
+                      links:
+                      - rel: about
+                        href: https://registrar.example.ee
+                    events:
+                    - eventAction: registration
+                      eventDate: '2015-03-14T09:00:00+02:00'
+                    - eventAction: expiration
+                      eventDate: '2026-03-14T00:00:00Z'
+                    - eventAction: last changed
+                      eventDate: '2024-01-02T12:30:00+02:00'
+                    nameservers:
+                    - objectClassName: nameserver
+                      ldhName: ns1.example.ee
+                      ipAddresses:
+                        v4:
+                        - 1.1.1.1
+                        v6:
+                        - 2606:4700:4700::1111
+                    - objectClassName: nameserver
+                      ldhName: ns.xn--nide-loa.ee
+                      unicodeName: ns.näide.ee
+                      ipAddresses:
+                        v4:
+                        - 8.8.8.8
+                    secureDNS:
+                      delegationSigned: true
+                      keyData:
+                      - flags: 257
+                        protocol: 3
+                        algorithm: 8
+                        publicKey: AwEAAcabcDEF1234567890publickeyMaterialAAAA
+                      - flags: 256
+                        protocol: 3
+                        algorithm: 13
+                        publicKey: AwEAAbcdEFG0987654321otherKeyMaterialBBBB
+                    remarks:
+                    - title: Out of Zone Date
+                      description:
+                      - 'Domain is out of the zone: 2026-11-01'
+                    - title: Deletion Date
+                      description:
+                      - 'Domain is scheduled for deletion: 2026-12-01'
+                    links:
+                    - value: https://st-rdap.infra.tld.ee/rdap/domain/policy-org-closed.ee
+                      rel: self
+                      href: https://st-rdap.infra.tld.ee/rdap/domain/policy-org-closed.ee
+                      type: application/rdap+json
+                    lang: en
+                    redacted:
+                    - name:
+                        description: Registrant Last Changed Date
+                      prePath: $.entities[?(@.roles[0]=='registrant')].events[?(@.eventAction=='last changed')]
+                      method: removal
+                      reason:
+                        description: Registrant last-changed timestamp is available to privileged users only.
+                    - name:
+                        description: Administrative Contact Name
+                      postPath: $.entities[?(@.roles[0]=='administrative')].vcardArray[1][?(@[0]=='fn')][3]
+                      method: emptyValue
+                      reason:
+                        description: Administrative contact name redacted for privacy.
+                    - name:
+                        description: Administrative Contact Email
+                      prePath: $.entities[?(@.roles[0]=='administrative')].vcardArray[1][?(@[0]=='email')]
+                      method: removal
+                      reason:
+                        description: Administrative contact email redacted for privacy.
+                    - name:
+                        description: Administrative Contact Phone
+                      prePath: $.entities[?(@.roles[0]=='administrative')].vcardArray[1][?(@[0]=='tel')]
+                      method: removal
+                      reason:
+                        description: Administrative Contact Phone redacted for privacy.
+                    - name:
+                        description: Administrative Contact Registry Code
+                      prePath: $.entities[?(@.roles[0]=='administrative')].publicIds
+                      method: removal
+                      reason:
+                        description: Administrative Contact Registry Code is available to privileged users only.
+                    - name:
+                        description: Administrative Contact Country
+                      prePath: $.entities[?(@.roles[0]=='administrative')].vcardArray[1][?(@[0]=='adr')]
+                      method: removal
+                      reason:
+                        description: Administrative Contact Country is available to privileged users only.
+                    - name:
+                        description: Administrative Contact Last Changed Date
+                      prePath: $.entities[?(@.roles[0]=='administrative')].events[?(@.eventAction=='last changed')]
+                      method: removal
+                      reason:
+                        description: Administrative contact last-changed timestamp is available to privileged users only.
+                    - name:
+                        description: Technical Contact Registry Code
+                      prePath: $.entities[?(@.roles[0]=='technical')].publicIds
+                      method: removal
+                      reason:
+                        description: Technical Contact Registry Code is available to privileged users only.
+                    - name:
+                        description: Technical Contact Country
+                      prePath: $.entities[?(@.roles[0]=='technical')].vcardArray[1][?(@[0]=='adr')]
+                      method: removal
+                      reason:
+                        description: Technical Contact Country is available to privileged users only.
+                    - name:
+                        description: Technical Contact Last Changed Date
+                      prePath: $.entities[?(@.roles[0]=='technical')].events[?(@.eventAction=='last changed')]
+                      method: removal
+                      reason:
+                        description: Technical contact last-changed timestamp is available to privileged users only.
+                    - name:
+                        description: Registrar Last Changed Date
+                      prePath: $.entities[?(@.roles[0]=='registrar')].events[?(@.eventAction=='last changed')]
+                      method: removal
+                      reason:
+                        description: Registrar Last Changed Date is available to privileged users only.
+                    - name:
+                        description: Nameservers Last Changed Date
+                      prePath: $.remarks[?(@.title=='Nameservers Last Changed')]
+                      method: removal
+                      reason:
+                        description: Nameservers Last Changed Date is available to privileged users only.
+                    - name:
+                        description: DNSSEC Last Changed Date
+                      prePath: $.remarks[?(@.title=='DNSSEC Last Changed')]
+                      method: removal
+                      reason:
+                        description: DNSSEC Last Changed Date is available to privileged users only.
+                    notices: []
+                policy2027_privileged_org_closed:
+                  summary: 2027 privileged — org gates closed, system phone matched
+                  value:
+                    rdapConformance:
+                    - rdap_level_0
+                    objectClassName: domain
+                    ldhName: policy-org-closed.ee
+                    status:
+                    - active
+                    entities:
+                    - objectClassName: entity
+                      roles:
+                      - registrant
+                      vcardArray:
+                      - vcard
+                      - - - version
+                          - {}
+                          - text
+                          - '4.0'
+                        - - fn
+                          - {}
+                          - text
+                          - Example Org OÜ
+                        - - kind
+                          - {}
+                          - text
+                          - org
+                        - - org
+                          - {}
+                          - text
+                          - Example Org OÜ
+                        - - email
+                          - {}
+                          - text
+                          - registrant@example.ee
+                        - - tel
+                          - {}
+                          - uri
+                          - tel:+372.6112233
+                        - - adr
+                          - cc: EE
+                          - text
+                          - - ''
+                            - ''
+                            - ''
+                            - ''
+                            - ''
+                            - ''
+                            - ''
+                      publicIds:
+                      - type: ee-registry-code
+                        identifier: '12345678'
+                      events:
+                      - eventAction: last changed
+                        eventDate: '2024-01-02T12:30:00+02:00'
+                    - objectClassName: entity
+                      roles:
+                      - administrative
+                      vcardArray:
+                      - vcard
+                      - - - version
+                          - {}
+                          - text
+                          - '4.0'
+                        - - fn
+                          - {}
+                          - text
+                          - Admin One
+                        - - kind
+                          - {}
+                          - text
+                          - org
+                        - - email
+                          - {}
+                          - text
+                          - admin1@example.ee
+                        - - tel
+                          - {}
+                          - uri
+                          - tel:+372.6111111
+                        - - adr
+                          - cc: EE
+                          - text
+                          - - ''
+                            - ''
+                            - ''
+                            - ''
+                            - ''
+                            - ''
+                            - ''
+                      publicIds:
+                      - type: ee-registry-code
+                        identifier: '12345679'
+                      events:
+                      - eventAction: last changed
+                        eventDate: '2024-01-03T09:15:00+02:00'
+                    - objectClassName: entity
+                      roles:
+                      - administrative
+                      vcardArray:
+                      - vcard
+                      - - - version
+                          - {}
+                          - text
+                          - '4.0'
+                        - - fn
+                          - {}
+                          - text
+                          - Private Admin
+                        - - kind
+                          - {}
+                          - text
+                          - individual
+                        - - email
+                          - {}
+                          - text
+                          - admin@example.test
+                        - - tel
+                          - {}
+                          - uri
+                          - tel:+372.6111222
+                      events:
+                      - eventAction: last changed
+                        eventDate: '2024-01-05T11:00:00Z'
+                    - objectClassName: entity
+                      roles:
+                      - technical
+                      vcardArray:
+                      - vcard
+                      - - - version
+                          - {}
+                          - text
+                          - '4.0'
+                        - - fn
+                          - {}
+                          - text
+                          - Tech One
+                        - - kind
+                          - {}
+                          - text
+                          - org
+                        - - email
+                          - {}
+                          - text
+                          - tech1@example.ee
+                        - - tel
+                          - {}
+                          - uri
+                          - tel:+372.6122222
+                        - - adr
+                          - cc: EE
+                          - text
+                          - - ''
+                            - ''
+                            - ''
+                            - ''
+                            - ''
+                            - ''
+                            - ''
+                      publicIds:
+                      - type: ee-registry-code
+                        identifier: '12345679'
+                      events:
+                      - eventAction: last changed
+                        eventDate: '2024-01-04T10:20:00+02:00'
+                    - objectClassName: entity
+                      roles:
+                      - registrar
+                      vcardArray:
+                      - vcard
+                      - - - version
+                          - {}
+                          - text
+                          - '4.0'
+                        - - fn
+                          - {}
+                          - text
+                          - Example Registrar Ltd
+                        - - email
+                          - {}
+                          - text
+                          - registrar@example.test
+                        - - tel
+                          - {}
+                          - uri
+                          - tel:+372.6000000
+                        - - adr
+                          - label: Example street, Tallinn, 10111
+                          - text
+                          - - ''
+                            - ''
+                            - ''
+                            - ''
+                            - ''
+                            - ''
+                            - ''
+                      events:
+                      - eventAction: last changed
+                        eventDate: '2024-01-05T10:00:00Z'
+                      links:
+                      - rel: about
+                        href: https://registrar.example.ee
+                    events:
+                    - eventAction: registration
+                      eventDate: '2015-03-14T09:00:00+02:00'
+                    - eventAction: expiration
+                      eventDate: '2026-03-14T00:00:00Z'
+                    - eventAction: last changed
+                      eventDate: '2024-01-02T12:30:00+02:00'
+                    nameservers:
+                    - objectClassName: nameserver
+                      ldhName: ns1.example.ee
+                      ipAddresses:
+                        v4:
+                        - 1.1.1.1
+                        v6:
+                        - 2606:4700:4700::1111
+                    - objectClassName: nameserver
+                      ldhName: ns.xn--nide-loa.ee
+                      unicodeName: ns.näide.ee
+                      ipAddresses:
+                        v4:
+                        - 8.8.8.8
+                    secureDNS:
+                      delegationSigned: true
+                      keyData:
+                      - flags: 257
+                        protocol: 3
+                        algorithm: 8
+                        publicKey: AwEAAcabcDEF1234567890publickeyMaterialAAAA
+                      - flags: 256
+                        protocol: 3
+                        algorithm: 13
+                        publicKey: AwEAAbcdEFG0987654321otherKeyMaterialBBBB
+                    remarks:
+                    - title: Out of Zone Date
+                      description:
+                      - 'Domain is out of the zone: 2026-11-01'
+                    - title: Deletion Date
+                      description:
+                      - 'Domain is scheduled for deletion: 2026-12-01'
+                    - title: Nameservers Last Changed
+                      description:
+                      - 'Nameservers last changed: 2024-01-06T10:00:00Z'
+                    - title: DNSSEC Last Changed
+                      description:
+                      - 'DNSSEC last changed: 2024-01-07T10:00:00Z'
+                    links:
+                    - value: https://st-rdap.infra.tld.ee/rdap/domain/policy-org-closed.ee
+                      rel: self
+                      href: https://st-rdap.infra.tld.ee/rdap/domain/policy-org-closed.ee
+                      type: application/rdap+json
+                    lang: en
+                    notices:
+                    - title: Privileged Access
+                      description:
+                      - Authorized under an active registry-side grant; approved legal text is required before production enablement.
                 anonymous_natural_person:
-                  summary: Anonymous tier — natural-person PII redacted
+                  summary: Legacy until activation (planned 2027-01-18) — Anonymous tier — natural-person PII redacted
                   value:
                     rdapConformance: ["rdap_level_0", "redacted"]
                     objectClassName: domain
@@ -345,7 +1206,7 @@ paths:
                         method: removal
                         reason: { description: Administrative and technical contact name and email redacted for privacy. }
                 anonymous_legal_person:
-                  summary: Anonymous tier — legal-person registrant (org contacts shown), DNSSEC signed
+                  summary: Legacy until activation (planned 2027-01-18) — Anonymous tier — legal-person registrant (org contacts shown), DNSSEC signed
                   value:
                     rdapConformance: ["rdap_level_0"]
                     objectClassName: domain
@@ -399,7 +1260,7 @@ paths:
                         type: application/rdap+json
                     lang: en
                 authenticated:
-                  summary: Authenticated tier — registrant contact disclosed
+                  summary: Legacy until activation (planned 2027-01-18) — Authenticated tier — registrant contact disclosed
                   value:
                     rdapConformance: ["rdap_level_0", "redacted"]
                     objectClassName: domain
@@ -443,7 +1304,7 @@ paths:
                         method: removal
                         reason: { description: Administrative and technical contact name and email redacted for privacy. }
                 privileged:
-                  summary: Privileged tier — unmasked contacts, no redaction, legal-basis notice
+                  summary: Legacy until activation (planned 2027-01-18) — Privileged tier — unmasked contacts, no redaction, legal-basis notice
                   value:
                     rdapConformance: ["rdap_level_0"]
                     objectClassName: domain
@@ -912,8 +1773,8 @@ components:
       type: array
       description: >-
         A jCard (RFC 7095): the two-element array `["vcard", [ [property, params, type,
-        value], ... ]]`. Disclosure removes natural-person `fn`/`email`/`tel` for callers
-        below the required tier.
+        value], ... ]]`. Withheld names retain empty fn; other withheld properties are removed.
+        2027 organization-country ADR uses cc; registrar formatted ADR uses label, each with seven empty components.
       example:
         - vcard
         - - [version, {}, text, "4.0"]
@@ -932,12 +1793,17 @@ components:
         publicIds:
           type: array
           description: >-
-            Present for an organisation (legal-person) registrant — the `.ee` registry code.
+            2027 org registrant code at detailed/privileged; org contact codes privileged-only.
+            Legacy org registrant codes remain public until activation.
           items:
             type: object
             properties:
               type: { type: string, example: ee-registry-code }
               identifier: { type: string }
+        events:
+          type: array
+          description: Entity last changed from blob timestamps, privileged-only under 2027.
+          items: { $ref: '#/components/schemas/Event' }
         links:
           type: array
           items: { $ref: '#/components/schemas/Link' }
@@ -945,13 +1811,18 @@ components:
     Nameserver:
       type: object
       description: >-
-        A nameserver as it appears inside a domain's `nameservers` array — host name only.
-        The service holds no glue IP addresses to disclose, so no `ipAddresses` member is
-        emitted at any tier.
+        A nameserver embedded in a domain. Legacy is hostname-only. From 2027 activation,
+        nameserver_records supplies ipAddresses.v4/v6 at every tier; empty families are omitted.
+        Older blobs fall back to hostnames without ipAddresses.
       properties:
         objectClassName: { type: string, example: nameserver }
         ldhName: { type: string, example: ns1.example.ee }
         unicodeName: { type: string }
+        ipAddresses:
+          type: object
+          properties:
+            v4: { type: array, items: { type: string, format: ipv4 } }
+            v6: { type: array, items: { type: string, format: ipv6 } }
 
     SecureDNS:
       type: object
@@ -975,7 +1846,12 @@ components:
       description: >-
         An RFC 9537 redaction record describing a withheld field. Emitted only on domain
         responses below the privileged tier; when the array is non-empty the response's
-        `rdapConformance` also carries the `"redacted"` token.
+        `rdapConformance` also carries the "redacted" token (search aggregates across rows).
+        2027 categories add Registrant Organization, registry code/country, administrative and
+        technical phones/codes/countries, domain/registrar last changed, Out of Zone Date,
+        Deletion Date, Nameservers Last Changed Date and DNSSEC Last Changed Date. A category
+        absent in source is never declared; inactive public/detailed shapes have no redacted.
+        Names use emptyValue/postPath; other categories use removal/prePath.
       properties:
         name:
           type: object
