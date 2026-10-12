@@ -424,15 +424,15 @@ paths:
                       ldhName: ns1.example.ee
                       ipAddresses:
                         v4:
-                        - 192.0.2.1
+                        - 1.1.1.1
                         v6:
-                        - 2001:db8::1
+                        - 2606:4700:4700::1111
                     - objectClassName: nameserver
                       ldhName: ns.xn--nide-loa.ee
                       unicodeName: ns.näide.ee
                       ipAddresses:
                         v4:
-                        - 192.0.2.2
+                        - 8.8.8.8
                     secureDNS:
                       delegationSigned: true
                       keyData:
@@ -768,15 +768,15 @@ paths:
                       ldhName: ns1.example.ee
                       ipAddresses:
                         v4:
-                        - 192.0.2.1
+                        - 1.1.1.1
                         v6:
-                        - 2001:db8::1
+                        - 2606:4700:4700::1111
                     - objectClassName: nameserver
                       ldhName: ns.xn--nide-loa.ee
                       unicodeName: ns.näide.ee
                       ipAddresses:
                         v4:
-                        - 192.0.2.2
+                        - 8.8.8.8
                     secureDNS:
                       delegationSigned: true
                       keyData:
@@ -1095,15 +1095,15 @@ paths:
                       ldhName: ns1.example.ee
                       ipAddresses:
                         v4:
-                        - 192.0.2.1
+                        - 1.1.1.1
                         v6:
-                        - 2001:db8::1
+                        - 2606:4700:4700::1111
                     - objectClassName: nameserver
                       ldhName: ns.xn--nide-loa.ee
                       unicodeName: ns.näide.ee
                       ipAddresses:
                         v4:
-                        - 192.0.2.2
+                        - 8.8.8.8
                     secureDNS:
                       delegationSigned: true
                       keyData:
